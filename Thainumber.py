@@ -44,23 +44,39 @@ def clean_data():
 #            path = directory + '/' + str(i) + '/' + dirty + '.png'
 #            os.remove(path)
 
-def make_dataset(data_dir = "../DADS5001 Machine Learning/data/raw/", size = 28):
+import os
+import glob
+import requests
+from PIL import Image
+import numpy as np
+import pickle
+
+def make_dataset(data_url="https://github.com/pongsapaks/Thai-handwrittingnumberproject/tree/main/raw", size=28):
     X = []
     Y = []
-    for folder in os.listdir(data_dir):
-        if os.path.isdir(data_dir + folder) == True:
-            label = folder
-            for file in glob.glob(data_dir + folder + "/*.png"):
-                img = load_img(file, grayscale=True, target_size=(size, size))
-                img = ImageOps.invert(img)
-                x = img_to_array(img)
-
-                X.append(x)
-                Y.append(label)
+    
+    response = requests.get(data_url)
+    if response.status_code == 200:
+        content = response.text
+        for line in content.split('\n'):
+            if 'blob-code blob-code-inner js-file-line' in line:
+                image_url = line.split('src="')[1].split('"')[0]
+                label = os.path.basename(os.path.dirname(image_url))
+                
+                response = requests.get(image_url, stream=True)
+                if response.status_code == 200:
+                    img = Image.open(response.raw).convert('L').resize((size, size))
+                    img = ImageOps.invert(img)
+                    x = np.array(img)
+                    
+                    X.append(x)
+                    Y.append(label)
+    
     X = np.asarray(X)
     Y = np.asarray(Y)
-    data = {"X": X, "Y": Y};
-    pickle.dump(data, open("thainumber_{}.pkl".format(size), "wb"), protocol = 2)
+    data = {"X": X, "Y": Y}
+    pickle.dump(data, open("thainumber_{}.pkl".format(size), "wb"), protocol=2)
+
 
 def load_dataset(size = 28):
     data = pickle.load(open("thainumber_{}.pkl".format(size), "rb"))
