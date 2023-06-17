@@ -1,67 +1,210 @@
-import base64
 import cv2
+from PIL import Image, ImageOps
+import os
+import git
 import numpy as np
-from PIL import ImageOps
-from sklearn import joblib
+import pandas as pd
+import pickle
+import seaborn as sns
+from tensorflow.keras.preprocessing.image import img_to_array, load_img, array_to_img
+import subprocess
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
+from scipy.stats import randint
+import numpy as np
+from sklearn.svm import SVC
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.svm import SVC
+from flask import Flask, request
+from PIL import Image
+from io import BytesIO
+import base64
 import dash
-import dash_core_components as dcc
-import dash_html_components as html
-from dash.dependencies import Input, Output, State
+from dash import dcc, html
+from dash_canvas import DashCanvas
+import dash_bootstrap_components as dbc
+import requests
+import json
+from dash_canvas.utils import parse_jsonstring
+from sklearn.model_selection import GridSearchCV
+import json
+from PIL import ImageDraw
 
-# Load the pre-trained model and PCA
-sv = joblib.load("model.pkl")
-pca = joblib.load("pca.pkl")
+def create_blank(width, height):
+    img = Image.new('L', (width, height), 'white')
+    return img
 
-# Load the mean and standard deviation for feature scaling
-X_mean = np.load("X_mean.npy")
-X_std = np.load("X_std.npy")
+# In[ ]: Standardization steps are included in make_dataset()
+## the last step is making a pickel file called std_params.pkl to store standardization steps.
+# We will use this to standardize when receive a picture from canvas
+def make_dataset(size=28):
+    image_dir = "C:/Users/Karuntarat/OneDrive/1st year/1st Year, 2nd Term/DADs6003 - ML/Thai HandWriting/Thai-handwrittingnumberproject/raw/" # replace with your local path
 
-# Define the size of the canvas
-size = 200
+    image_files = []
+    for root, dirs, files in os.walk(image_dir):
+        for file in files:
+            if file.endswith(".png"):
+                image_files.append(os.path.join(root, file))
 
-# Create the Dash app
-app = dash.Dash(__name__)
+    print("Total image files:", len(image_files))
 
-# Set up the app layout
-app.layout = html.Div(children=[
-    dcc.Loading(
-        className='loading',
-        children=[
-            html.Div(className='canvas-container', children=[
-                html.Canvas(id="canvas", width=size, height=size, style={"border": "1px solid black"}),
-            ]),
-            html.Button("Recognize", id="recognize-btn"),
-            html.Div(id="prediction-output")
-        ]
-    )
-])
+    X = []
+    Y = []
 
-# Callback function to handle canvas drawing and recognition
+    for image_path in image_files:
+        img = cv2.imread(image_path)
+        img = Image.open(image_path).convert("L")
+        img = ImageOps.invert(img)
+        img = img.resize((size, size))
+        label = os.path.basename(os.path.dirname(image_path))
+        x = np.array(img)
+        X.append(x)
+        Y.append(label)
+
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+
+    reshaped_X = X.reshape((X.shape[0], -1))
+    Ydf = pd.DataFrame(Y)
+    Xdf = pd.DataFrame(reshaped_X)
+
+    X_mean = Xdf.mean()
+    X_std = Xdf.std()
+    Z = (Xdf - X_mean) / X_std
+    Z = Z.fillna(0)
+
+    with open("std_params.pkl", "wb") as f:
+        pickle.dump((X_mean, X_std), f)
+
+# In[ ]: preprocessing step.
+# model.pkl is to store ML model so we can use with canvas
+# pca.pkl is to store PCA step so we can preprocess the picture received from canvas
+    pca = PCA(n_components=0.75)
+    pca.fit(Z)
+    X_pca = pca.transform(Z)
+
+    X_train, X_test, y_train, y_test = train_test_split(X_pca, Y, test_size=0.2, random_state=42)
+
+    parameters = {'kernel':('linear', 'rbf'), 'C':[1, 25], 'gamma': [0.001,0.002, 0.01, 0.1, 1]}
+    sv = SVC()
+    clf = GridSearchCV(sv, parameters)
+    clf.fit(X_train, y_train)
+    
+    print("Best parameters found: ", clf.best_params_)
+    
+    pred = clf.predict(X_test)
+    accuracy = accuracy_score(y_test, pred)
+    print(f"Model accuracy: {accuracy}")
+
+    # Save the trained model
+    with open("model.pkl", "wb") as f:
+        pickle.dump(clf, f)
+    with open("pca.pkl", "wb") as f:
+        pickle.dump(pca, f)
+make_dataset()
+
+# In[ ]: preprocess_image() is used with a pictured received from canvas.
+# This is to adjust the size to be 28*28 and covert to grayscale.
+def preprocess_image(image_path, size=28):
+    img = Image.open(image_path).convert("L")
+    img = ImageOps.invert(img)
+    img = img.resize((size, size))
+    img_arr = np.array(img)
+    return img_arr
+
+# In[ ]:
+def predict_image(image, model_path="model.pkl", pca_path="pca.pkl", std_params_path="std_params.pkl", size=28):
+    # Load the model, pca, and standardization parameters from files
+    with open(model_path, 'rb') as f:
+        model = pickle.load(f)
+    with open(pca_path, 'rb') as f:
+        pca = pickle.load(f)
+    with open(std_params_path, 'rb') as f:
+        X_mean, X_std = pickle.load(f)
+
+    # Preprocess the image
+    # If image is not a path but already an image, skip this line
+    if isinstance(image, str):
+        image = Image.open(image).convert("L")
+    image = ImageOps.invert(image)
+    image = image.resize((size, size))
+    img_arr = np.array(image)
+
+    # Flatten and standardize the image
+    reshaped_image = img_arr.reshape((1, -1))
+    # Avoid division by zero by adding a small constant to X_std
+    epsilon = 1e-8
+    standardized_image = (reshaped_image - np.array(X_mean).reshape(1,-1)) / (np.array(X_std).reshape(1,-1) + epsilon)
+
+    if np.isnan(standardized_image).any():
+        print("standardized_image still contains NaN values!")
+
+    # Apply PCA
+    transformed_image = pca.transform(standardized_image)
+
+    # Predict the label
+    prediction = model.predict(transformed_image)
+
+    return prediction
+
+# Initialize the Flask app
+server = Flask(__name__)
+
+@server.route('/predict', methods=['POST'])
+def predict():
+    data = request.get_json(force=True)
+    image_data = data['image']
+    image_data = base64.b64decode(image_data.split(',')[1])
+    image = Image.open(BytesIO(image_data))
+
+    # preprocess and predict
+    prediction = predict_image(image) # Modify this line to suit the preprocessing and prediction in your case
+    return str(prediction)
+
+# Initialize the Dash app
+external_stylesheets = [dbc.themes.BOOTSTRAP]
+app = dash.Dash(__name__, server=server, external_stylesheets=external_stylesheets) # server=server connects Dash to Flask
+
+canvas_width = 500
+
+# Create an initial blank image
+initial_img = create_blank(canvas_width, canvas_width)
+buffered = BytesIO()
+initial_img.save(buffered, format="PNG")
+initial_img_str = base64.b64encode(buffered.getvalue()).decode()
+
+app.layout = html.Div([
+    DashCanvas(id='canvas',
+               lineWidth=15,
+               width=canvas_width,
+               height=canvas_width,
+               lineColor='Black',
+               image_content='data:image/png;base64,{}'.format(initial_img_str) # set initial image content
+               ),
+    html.Button('Predict', id='button_predict', n_clicks=0),
+    html.Button('Clear', id='button_clear', n_clicks=0),  # Clear button
+    html.Div(id='prediction')
+]) 
+
 @app.callback(
-    Output("prediction-output", "children"),
-    Input("recognize-btn", "n_clicks"),
-    State("canvas", "toDataURL"),
+    dash.dependencies.Output('prediction', 'children'),
+    [dash.dependencies.Input('button_predict', 'n_clicks')],
+    [dash.dependencies.State('canvas', 'json_data')]
 )
-def recognize_handwriting(n_clicks, canvas_data):
-    if n_clicks is not None:
-        # Save the canvas image to a file
-        img_data = base64.b64decode(canvas_data.split(",")[1])
-        with open("user_input.png", "wb") as f:
-            f.write(img_data)
+def update_output(n_clicks, json_data):
+    if n_clicks > 0:
+        # Get image data
+        mask = parse_jsonstring(json_data, initial_img.size[::-1])
+        img = Image.fromarray(mask.astype('uint8')*255, 'L')
+        
+        # Preprocess and predict
+        prediction = predict_image(img)
+        return 'Your prediction: {}'.format(prediction)
 
-        # Load and preprocess the user input image
-        img = cv2.imread("user_input.png")
-        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img_resized = cv2.resize(img_gray, (28, 28))
-        x = img_resized.flatten().reshape(1, -1)
-        x_scaled = (x - X_mean) / X_std
-        x_pca = pca.transform(x_scaled)
-        prediction = sv.predict(x_pca)[0]
-
-        return html.H2(f"Prediction: {prediction}")
-
-    return ""
-
-# Run the app
 if __name__ == '__main__':
     app.run_server(debug=True)
