@@ -276,7 +276,7 @@ train_test_split_slider = dcc.Slider(
     min=0,
     max=100,
     step=10,
-    value=70,
+    value=80,
     marks={i: f'{i}' for i in range(0, 101, 10)},
 )
 canvas = html.Div([
@@ -305,11 +305,13 @@ sidebar = dbc.Card(
                     style={'font-size': '12px'}
                 ),
                 daq.LEDDisplay(
+                    id='train-data-led',
                     label="Train data",
                     value=X_train.shape[0],
                     style={'font-size': '12px'}
                 ),
                 daq.LEDDisplay(
+                    id='test-data-led',
                     label="Test data",
                     value=X_test.shape[0],
                     style={'font-size': '12px'}
@@ -576,7 +578,20 @@ def update_confusion_matrix(train_test_split_value):
     layout = go.Layout(title="Confusion Matrix", xaxis=dict(title="Predicted labels"), yaxis=dict(title="True labels"), template="plotly_white")
     return {'data': [trace], 'layout': layout}
 
+@app.callback(
+    [Output('train-data-led', 'value'), Output('test-data-led', 'value')],
+    [Input('train-test-slider', 'value')]
+)
+def update_led_display(value):
+    # Assuming the 'value' from the slider represents the proportion
+    # of the data to be used for training, and that the slider's value
+    # ranges from 0 to 1.
 
+    total_data = X_pca.shape[0]
+    train_data = int(total_data * value/100)
+    test_data = total_data - train_data
+
+    return train_data, test_data
 
 
 if __name__ == "__main__":
