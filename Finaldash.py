@@ -583,10 +583,6 @@ def update_confusion_matrix(train_test_split_value):
     [Input('train-test-slider', 'value')]
 )
 def update_led_display(value):
-    # Assuming the 'value' from the slider represents the proportion
-    # of the data to be used for training, and that the slider's value
-    # ranges from 0 to 1.
-
     total_data = X_pca.shape[0]
     train_data = int(total_data * value/100)
     test_data = total_data - train_data
